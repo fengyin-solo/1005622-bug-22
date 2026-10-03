@@ -43,7 +43,9 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">
+            {{ column === '发现问题数' ? patrolIssueCountLabel(row) : (row[column] ?? '—') }}
+          </td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
@@ -65,6 +67,7 @@
 
     <footer class="page-foot">
       <span>共 {{ total }} 条站点巡检记录</span>
+      <span v-if="noticeMessage" class="notice-text">{{ noticeMessage }}</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -77,6 +80,7 @@ import {
   downloadEntries,
   listEntries,
   moduleMeta,
+  patrolIssueCountLabel,
   runAction as applyAction,
 } from '@/api/local-service'
 import type { EntryRow } from '@/data/types'
@@ -90,6 +94,7 @@ const stats = [{"label": "待巡检站点", "value": 0}, {"label": "待整改问
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const noticeMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
 const statusSummary = computed(() =>
@@ -105,7 +110,18 @@ function resetFilters() {
 }
 
 function exportRows() {
-  downloadEntries(meta.key)
+  errorMessage.value = ''
+  noticeMessage.value = ''
+  try {
+    // 出包跟列表读同一份数据：把当前筛选条件一起传给导出。
+    const result = downloadEntries(meta.key, filters.value)
+    noticeMessage.value =
+      result.followups > 0
+        ? `已导出《${result.filename}》，新同步 ${result.followups} 条到期跟进到热费结算待跟进清单`
+        : `已导出《${result.filename}》，没有新的到期跟进需要同步`
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '站点巡检清单导出失败'
+  }
 }
 
 function openCreate() {
@@ -124,6 +140,7 @@ function runAction(action: string, row: EntryRow) {
 
 function reload() {
   errorMessage.value = ''
+  noticeMessage.value = ''
   try {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items

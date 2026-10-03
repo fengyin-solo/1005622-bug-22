@@ -32,6 +32,13 @@ export type ActionResult = {
   message: string
 }
 
+export type ExportResult = {
+  filename: string
+  content: string
+  /** 本次出包新同步到热费结算待跟进清单的到期巡检结果条数，重复出包为 0。 */
+  followups: number
+}
+
 export type OverviewResult = {
   cards: { label: string; value: number }[]
   modules: { name: string; created: number; pending: number; abnormal: number }[]
