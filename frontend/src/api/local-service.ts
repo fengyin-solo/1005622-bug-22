@@ -1,6 +1,28 @@
 import { MODULE_BY_KEY } from '@/data/modules'
-import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
-import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
+import {
+  buildPatrolCsv,
+  buildPatrolFingerprint,
+  queryPatrolSnapshot,
+} from '@/data/patrol-core'
+import { listFollowUps, reconcileFollowUps } from '@/data/followups'
+import {
+  allRows,
+  listDocuments,
+  listRows,
+  resetRows,
+  saveDocuments,
+  saveRows,
+} from '@/data/local-store'
+import type {
+  ActionResult,
+  EntryRow,
+  FollowUpItem,
+  ModuleMeta,
+  OverviewResult,
+  PageResult,
+  PatrolPackage,
+  PatrolPackageResult,
+} from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
 const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
@@ -73,7 +95,127 @@ export function exportEntries(key: string): { filename: string; content: string 
 
 export function downloadEntries(key: string): void {
   const { filename, content } = exportEntries(key)
-  const blob = new Blob([content], { type: 'text/csv;charset=utf-8' })
+  downloadTextFile(filename, content, 'text/csv;charset=utf-8')
+}
+
+const PATROL_KEY = 'stationpatrol'
+const PATROL_DOC_KEY = 'stationpatrol-packages'
+
+function nextDocId(items: { id: number }[]): number {
+  return items.reduce((max, item) => Math.max(max, item.id), 0) + 1
+}
+
+export function listPatrolPackages(): PatrolPackage[] {
+  return listDocuments<PatrolPackage>(PATROL_DOC_KEY).sort((a, b) => b.id - a.id)
+}
+
+// 巡检列表与出包文件的唯一入口：同一份快照、同一套发现问题数口径。
+export function loadPatrolSnapshot(filters: Record<string, string> = {}) {
+  return queryPatrolSnapshot(listRows(PATROL_KEY), { filters })
+}
+
+// 提交出包：缺项记录照常导出并逐格标注；残留记录剔除并在结果里点名；
+// 内容指纹相同的重复提交只落一条；到期结果同步到热费结算待跟进清单。
+export function submitPatrolPackage(filters: Record<string, string> = {}): PatrolPackageResult {
+  const now = new Date()
+  const meta = moduleMeta(PATROL_KEY)
+  // 全量核定一次，保证筛选视图下到期同步也不会漏行。
+  const full = queryPatrolSnapshot(listRows(PATROL_KEY), { now })
+  const filtered = queryPatrolSnapshot(listRows(PATROL_KEY), { filters, now })
+
+  let content = ''
+  let exported = 0
+  // 缺项/挂起/到期按当前筛选视图点名，残留记录按全量口径点名（它在筛选前已统一剔除）。
+  const viewIssues = filtered.issues.filter((issue) => issue.level !== 'residual')
+  const issues = [
+    ...viewIssues,
+    ...full.issues.filter((issue) => issue.level === 'residual'),
+  ]
+  try {
+    content = buildPatrolCsv(filtered.rows)
+    exported = filtered.rows.length
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : '未知错误'
+    issues.push({
+      level: 'error',
+      rowKey: '-',
+      message: `出包文件生成中断：${detail}`,
+    })
+  }
+
+  const filename = `${meta.name}-巡检清单-${full.today}.csv`
+  const fingerprint = buildPatrolFingerprint(content)
+  const packages = listDocuments<PatrolPackage>(PATROL_DOC_KEY)
+  const existing = packages.find((item) => item.fingerprint === fingerprint)
+
+  // 到期（已上报且过整改期限）但未挂起的记录才同步；发现问题数缺失先挂起，不进待跟进。
+  const overdueRows = full.rows.filter((row) => row.overdue)
+  const activeKeys = new Set(overdueRows.map((row) => String(row['巡检编号'])))
+  const synced = reconcileFollowUps(
+    overdueRows.map((row) => ({
+      sourceId: Number(row.id),
+      bizKey: String(row['巡检编号']),
+      station: String(row['巡检站点'] ?? ''),
+      deadline: String(row['整改期限'] ?? ''),
+      reason: '巡检已上报，整改期限到期未整改',
+      createdAt: now.toISOString(),
+    })),
+    listFollowUps()
+      .filter(
+        (item) =>
+          item.sourceModule === 'stationpatrol' &&
+          item.resolvedAt === null &&
+          !activeKeys.has(item.bizKey),
+      )
+      .map((item) => item.bizKey),
+    now,
+  ).added
+
+  let record: PatrolPackage | null = null
+  let deduped = false
+  if (!issues.some((issue) => issue.level === 'error')) {
+    if (existing) {
+      deduped = true
+      record = existing
+    } else {
+      record = {
+        id: nextDocId(packages),
+        filename,
+        fingerprint,
+        rowCount: exported,
+        createdAt: now.toISOString(),
+      }
+      packages.push(record)
+      saveDocuments(PATROL_DOC_KEY, packages)
+    }
+  }
+
+  return {
+    ok: !issues.some((issue) => issue.level === 'error'),
+    deduped,
+    filename,
+    content,
+    fingerprint,
+    package: record,
+    exported,
+    suspended: filtered.rows.filter((row) => row.suspended).length,
+    overdue: overdueRows.length,
+    residual: full.residualRows.length,
+    synced,
+    issues,
+  }
+}
+
+export function downloadPatrolPackage(result: PatrolPackageResult): void {
+  downloadTextFile(result.filename, result.content, 'text/csv;charset=utf-8')
+}
+
+export function listHeatFollowUps(): FollowUpItem[] {
+  return listFollowUps()
+}
+
+function downloadTextFile(filename: string, content: string, mime: string): void {
+  const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url

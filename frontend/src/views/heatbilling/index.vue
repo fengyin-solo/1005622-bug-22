@@ -63,6 +63,38 @@
       </tbody>
     </table>
 
+    <section class="followup-panel">
+      <header class="followup-head">
+        <h3>待跟进清单（巡检到期同步）</h3>
+        <button class="btn ghost" type="button" @click="reloadFollowUps">刷新</button>
+      </header>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>巡检编号</th>
+            <th>巡检站点</th>
+            <th>整改期限</th>
+            <th>跟进原因</th>
+            <th>同步时间</th>
+            <th>状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in followUps" :key="item.id" :class="{ 'followup-done': item.resolvedAt }">
+            <td>{{ item.bizKey }}</td>
+            <td>{{ item.station }}</td>
+            <td>{{ item.deadline }}</td>
+            <td>{{ item.reason }}</td>
+            <td>{{ formatTime(item.createdAt) }}</td>
+            <td>{{ item.resolvedAt ? `已解除（${formatTime(item.resolvedAt)}）` : '待跟进' }}</td>
+          </tr>
+          <tr v-if="!followUps.length">
+            <td colspan="6" class="empty-state">暂无巡检到期同步的待跟进事项</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条热费结算记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -76,10 +108,11 @@ import { computed, onMounted, ref } from 'vue'
 import {
   downloadEntries,
   listEntries,
+  listHeatFollowUps,
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+import type { EntryRow, FollowUpItem } from '@/data/types'
 
 const meta = moduleMeta('heatbilling')
 const columns = ["结算编号", "用户名称", "用热面积", "热价标准", "应缴金额", "缴费日期", "收费员", "结算状态"]
@@ -90,6 +123,7 @@ const stats = [{"label": "待核算用户", "value": 0}, {"label": "已缴费用
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const followUps = ref<FollowUpItem[]>([])
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
 const statusSummary = computed(() =>
@@ -98,6 +132,14 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function formatTime(value: string): string {
+  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+
+function reloadFollowUps() {
+  followUps.value = listHeatFollowUps()
+}
 
 function resetFilters() {
   filters.value = {}
@@ -133,5 +175,8 @@ function reload() {
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  reload()
+  reloadFollowUps()
+})
 </script>

@@ -57,3 +57,29 @@ export function resetRows(key: string): EntryRow[] {
 export function storageKey(): string {
   return STORAGE_KEY
 }
+
+// 通用文档：巡检出包记录、热费待跟进事项这类独立于业务表的持久化数据都走这里。
+const DOC_PREFIX = 'district-heating:doc:'
+
+export function listDocuments<T>(docKey: string): T[] {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return []
+  }
+  const raw = window.localStorage.getItem(DOC_PREFIX + docKey)
+  if (!raw) {
+    return []
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as T[]) : []
+  } catch {
+    return []
+  }
+}
+
+export function saveDocuments<T>(docKey: string, items: T[]): void {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return
+  }
+  window.localStorage.setItem(DOC_PREFIX + docKey, JSON.stringify(items))
+}
